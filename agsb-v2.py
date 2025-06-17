@@ -104,10 +104,10 @@ def print_usage():
     print("  \033[36mpython3 script.py del\033[0m                 - 卸载服务")
     print()
     print("\033[33m支持的环境变量:\033[0m")
-    print("  \033[36mexport vmpt=12345\033[0m                       - 设置自定义Vmess端口")
-    print("  \033[36mexport uuid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\033[0m - 设置自定义UUID")
-    print("  \033[36mexport agn=your-domain.com\033[0m              - 设置自定义域名")
-    print("  \033[36mexport agk=YOUR_ARGO_TUNNEL_TOKEN\033[0m       - 设置Argo Tunnel Token")
+    print("  \033[36mexport vmpt=\033[0m                       - 设置自定义Vmess端口")
+    print("  \033[36mexport uuid=\033[0m - 设置自定义UUID")
+    print("  \033[36mexport agn=\033[0m              - 设置自定义域名")
+    print("  \033[36mexport agk=\033[0m       - 设置Argo Tunnel Token")
     print()
 
 # 写入日志函数

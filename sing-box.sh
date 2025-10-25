@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================
-# 老王sing-box四合一安装脚本
+# sing-box四协议保活脚本
 # vless-version-reality|vmess-ws-tls(tunnel)|hysteria2|tuic5
 # 最后更新时间: 2025.10.17
 # 添加进程保活和内存优化功能
@@ -1148,7 +1148,7 @@ create_shortcut() {
   cat > "$work_dir/sb.sh" << EOF
 #!/usr/bin/env bash
 
-bash <(curl -Ls https://raw.githubusercontent.com/eooce/sing-box/main/sing-box.sh) \$1
+bash <(curl -Ls https://raw.githubusercontent.com/suouaki/agsb/main/sing-box.sh) \$1
 EOF
   chmod +x "$work_dir/sb.sh"
   ln -sf "$work_dir/sb.sh" /usr/bin/sb
@@ -1777,10 +1777,7 @@ menu() {
    
    clear
    echo ""
-   green "Telegram群组: ${purple}https://t.me/eooceu${re}"
-   green "YouTube频道: ${purple}https://youtube.com/@eooce${re}"
-   green "Github地址: ${purple}https://github.com/eooce/sing-box${re}\n"
-   purple "=== 老王sing-box四合一安装脚本 ===\n"
+   purple "=== sing-box四协议保活脚本 ===\n"
    purple "---Argo 状态: ${argo_status}"   
    purple "--Nginx 状态: ${nginx_status}"
    purple "singbox 状态: ${singbox_status}"

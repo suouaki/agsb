@@ -8,6 +8,11 @@
 
 ### 免费vps免root一键安装hysteria2
 ```bash
+curl -o sing-box-argo.sh https://raw.githubusercontent.com/suouaki/agsb/main/sing-box-argo.sh && chmod +x sing-box-argo.sh && ./sing-box-argo.sh
+```
+
+### 免费vps免root一键安装hysteria2
+```bash
 systemctl stop firewalld && cd ~ && curl -fsSL https://raw.githubusercontent.com/zhumengkang/agsb/main/hysteria2-v1.py | python3 -
 ```
 

@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # =========================
-# sing-box Hysteria2 保活脚本
+# sing-box vmess+Argo保活脚本
+# 精简版 - 仅保留vmess协议和Argo代理
+# 内存优化: sing-box 60MB, argo 30MB, 看门狗 20MB
 # 最后更新时间: 2025.10.17
-# 优化内存占用限制100MB
 # =========================
 
 export LANG=en_US.UTF-8
@@ -17,7 +18,7 @@ skyblue="\e[1;36m"
 red() { echo -e "\e[1;91m$1\033[0m"; }
 green() { echo -e "\e[1;32m$1\033[0m"; }
 yellow() { echo -e "\e[1;33m$1\033[0m"; }
-purple() { echo -e "\e[1;35m$1\033{0m"; }
+purple() { echo -e "\e[1;35m$1\033[0m"; }
 skyblue() { echo -e "\e[1;36m$1\033[0m"; }
 reading() { read -p "$(red "$1")" "$2"; }
 
@@ -25,7 +26,9 @@ reading() { read -p "$(red "$1")" "$2"; }
 server_name="sing-box"
 work_dir="/etc/sing-box"
 config_dir="${work_dir}/config.json"
-export hy2_port=${PORT:-$(shuf -i 1000-65000 -n 1)}
+export vmess_port=${PORT:-$(shuf -i 1000-65000 -n 1)}
+export CFIP=${CFIP:-'cf.877774.xyz'} 
+export CFPORT=${CFPORT:-'443'} 
 
 # 检查是否为root下运行
 [[ $EUID -ne 0 ]] && red "请在root用户下运行脚本" && exit 1
@@ -71,60 +74,28 @@ check_watchdog() {
     fi
 }
 
-#根据系统类型安装、卸载依赖
-manage_packages() {
-    if [ $# -lt 2 ]; then
-        red "Unspecified package name or action" 
-        return 1
-    fi
-
-    action=$1
-    shift
-
+# 根据系统类型安装依赖
+install_packages() {
     for package in "$@"; do
-        if [ "$action" == "install" ]; then
-            if command_exists "$package"; then
-                green "${package} already installed"
-                continue
-            fi
-            yellow "正在安装 ${package}..."
-            if command_exists apt; then
-                DEBIAN_FRONTEND=noninteractive apt install -y "$package"
-            elif command_exists dnf; then
-                dnf install -y "$package"
-            elif command_exists yum; then
-                yum install -y "$package"
-            elif command_exists apk; then
-                apk update
-                apk add "$package"
-            else
-                red "Unknown system!"
-                return 1
-            fi
-        elif [ "$action" == "uninstall" ]; then
-            if ! command_exists "$package"; then
-                yellow "${package} is not installed"
-                continue
-            fi
-            yellow "正在卸载 ${package}..."
-            if command_exists apt; then
-                apt remove -y "$package" && apt autoremove -y
-            elif command_exists dnf; then
-                dnf remove -y "$package" && dnf autoremove -y
-            elif command_exists yum; then
-                yum remove -y "$package" && yum autoremove -y
-            elif command_exists apk; then
-                apk del "$package"
-            else
-                red "Unknown system!"
-                return 1
-            fi
+        if command_exists "$package"; then
+            green "${package} already installed"
+            continue
+        fi
+        yellow "正在安装 ${package}..."
+        if command_exists apt; then
+            DEBIAN_FRONTEND=noninteractive apt install -y "$package"
+        elif command_exists dnf; then
+            dnf install -y "$package"
+        elif command_exists yum; then
+            yum install -y "$package"
+        elif command_exists apk; then
+            apk update
+            apk add "$package"
         else
-            red "Unknown action: $action"
+            red "Unknown system!"
             return 1
         fi
     done
-
     return 0
 }
 
@@ -152,60 +123,28 @@ allow_port() {
     has_ufw=0
     has_firewalld=0
     has_iptables=0
-    has_ip6tables=0
 
     command_exists ufw && has_ufw=1
     command_exists firewall-cmd && systemctl is-active firewalld >/dev/null 2>&1 && has_firewalld=1
     command_exists iptables && has_iptables=1
-    command_exists ip6tables && has_ip6tables=1
 
-    # 出站和基础规则
-    [ "$has_ufw" -eq 1 ] && ufw --force default allow outgoing >/dev/null 2>&1
-    [ "$has_firewalld" -eq 1 ] && firewall-cmd --permanent --zone=public --set-target=ACCEPT >/dev/null 2>&1
-    [ "$has_iptables" -eq 1 ] && {
-        iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -I INPUT 3 -i lo -j ACCEPT
-        iptables -C INPUT -p icmp -j ACCEPT 2>/dev/null || iptables -I INPUT 4 -p icmp -j ACCEPT
-        iptables -P FORWARD DROP 2>/dev/null || true
-        iptables -P OUTPUT ACCEPT 2>/dev/null || true
-    }
-    [ "$has_ip6tables" -eq 1 ] && {
-        ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || ip6tables -I INPUT 3 -i lo -j ACCEPT
-        ip6tables -C INPUT -p icmp -j ACCEPT 2>/dev/null || ip6tables -I INPUT 4 -p icmp -j ACCEPT
-        ip6tables -P FORWARD DROP 2>/dev/null || true
-        ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
-    }
-
-    # 入站
+    # 放行端口
     for rule in "$@"; do
         port=${rule%/*}
         proto=${rule#*/}
         [ "$has_ufw" -eq 1 ] && ufw allow in ${port}/${proto} >/dev/null 2>&1
         [ "$has_firewalld" -eq 1 ] && firewall-cmd --permanent --add-port=${port}/${proto} >/dev/null 2>&1
         [ "$has_iptables" -eq 1 ] && (iptables -C INPUT -p ${proto} --dport ${port} -j ACCEPT 2>/dev/null || iptables -I INPUT 4 -p ${proto} --dport ${port} -j ACCEPT)
-        [ "$has_ip6tables" -eq 1 ] && (ip6tables -C INPUT -p ${proto} --dport ${port} -j ACCEPT 2>/dev/null || ip6tables -I INPUT 4 -p ${proto} --dport ${port} -j ACCEPT)
     done
 
     [ "$has_firewalld" -eq 1 ] && firewall-cmd --reload >/dev/null 2>&1
-
-    # 规则持久化
-    if command_exists rc-service 2>/dev/null; then
-        [ "$has_iptables" -eq 1 ] && iptables-save > /etc/iptables/rules.v4 2>/dev/null
-        [ "$has_ip6tables" -eq 1 ] && ip6tables-save > /etc/iptables/rules.v6 2>/dev/null
-    else
-        if ! command_exists netfilter-persistent; then
-            manage_packages install iptables-persistent || yellow "请手动安装netfilter-persistent或保存iptables规则" 
-            netfilter-persistent save >/dev/null 2>&1
-        elif command_exists service; then
-            service iptables save 2>/dev/null
-            service ip6tables save 2>/dev/null
-        fi
-    fi
 }
 
-# 下载并安装 sing-box,cloudflared
+# 下载并安装 sing-box, cloudflared
 install_singbox() {
     clear
     purple "正在安装sing-box中，请稍后..."
+    
     # 判断系统架构
     ARCH_RAW=$(uname -m)
     case "${ARCH_RAW}" in
@@ -217,27 +156,23 @@ install_singbox() {
         *) red "不支持的架构: ${ARCH_RAW}"; exit 1 ;;
     esac
 
-    # 下载sing-box,cloudflared
+    # 下载sing-box, cloudflared
     [ ! -d "${work_dir}" ] && mkdir -p "${work_dir}" && chmod 777 "${work_dir}"
     curl -sLo "${work_dir}/sing-box" "https://$ARCH.ssss.nyc.mn/sbx"
     curl -sLo "${work_dir}/argo" "https://$ARCH.ssss.nyc.mn/bot"
     chown root:root ${work_dir} && chmod +x ${work_dir}/${server_name} ${work_dir}/argo
 
-    # 生成随机密码
+    # 生成UUID
     uuid=$(cat /proc/sys/kernel/random/uuid)
 
     # 放行端口
-    allow_port $hy2_port/udp > /dev/null 2>&1
+    allow_port $vmess_port/tcp > /dev/null 2>&1
 
-    # 生成自签名证书
-    openssl ecparam -genkey -name prime256v1 -out "${work_dir}/private.key"
-    openssl req -new -x509 -days 3650 -key "${work_dir}/private.key" -out "${work_dir}/cert.pem" -subj "/CN=bing.com"
-    
     # 检测网络类型并设置DNS策略
     dns_strategy=$(ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 && echo "prefer_ipv4" || (ping -c 1 -W 3 2001:4860:4860::8888 >/dev/null 2>&1 && echo "prefer_ipv6" || echo "prefer_ipv4"))
 
-   # 生成配置文件 - 只保留Hysteria2
-cat > "${config_dir}" << EOF
+    # 生成精简配置文件 - 仅vmess协议
+    cat > "${config_dir}" << EOF
 {
   "log": {
     "disabled": false,
@@ -262,24 +197,19 @@ cat > "${config_dir}" << EOF
   },
   "inbounds": [
     {
-      "type": "hysteria2",
-      "tag": "hysteria2",
+      "type": "vmess",
+      "tag": "vmess-ws",
       "listen": "::",
-      "listen_port": $hy2_port,
+      "listen_port": $vmess_port,
       "users": [
         {
-          "password": "$uuid"
+          "uuid": "$uuid"
         }
       ],
-      "ignore_client_bandwidth": false,
-      "masquerade": "https://bing.com",
-      "tls": {
-        "enabled": true,
-        "alpn": ["h3"],
-        "min_version": "1.3",
-        "max_version": "1.3",
-        "certificate_path": "$work_dir/cert.pem",
-        "key_path": "$work_dir/private.key"
+      "transport": {
+        "type": "ws",
+        "path": "/vmess-argo",
+        "early_data_header_name": "Sec-WebSocket-Protocol"
       }
     }
   ],
@@ -302,12 +232,12 @@ EOF
 
 # 添加进程保活看门狗服务
 add_watchdog_service() {
-    green "添加进程保活看门狗服务..."
+    yellow "添加进程保活看门狗服务..."
     
     # 创建看门狗脚本
     cat > /etc/sing-box/watchdog.sh << 'EOF'
 #!/bin/bash
-# Sing-box 进程保活看门狗脚本
+# Sing-box 进程保活看门狗脚本 - 精简版
 
 INTERVAL=30
 MAX_RETRIES=3
@@ -364,7 +294,7 @@ restart_argo() {
         pkill -f cloudflared
         pkill -f argo
         sleep 2
-        /etc/sing-box/argo tunnel --url http://localhost:8001 --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1 &
+        /etc/sing-box/argo tunnel --url http://localhost:$vmess_port --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1 &
     fi
     
     sleep 3
@@ -447,8 +377,8 @@ ExecStart=/etc/sing-box/watchdog.sh
 Restart=always
 RestartSec=10
 LimitNOFILE=65536
-MemoryLimit=16M
-CPUQuota=10%
+MemoryLimit=20M
+CPUQuota=15%
 
 [Install]
 WantedBy=multi-user.target
@@ -486,7 +416,7 @@ EOF
 
 # 内存优化配置
 optimize_memory() {
-    green "应用内存优化配置..."
+    yellow "应用内存优化配置..."
     
     # 优化内核参数
     cat >> /etc/sysctl.conf << EOF
@@ -501,11 +431,6 @@ vm.swappiness = 10
 EOF
     
     sysctl -p
-    
-    # 优化 Sing-box 配置以减少内存使用
-    if [ -f "$config_dir" ] && command -v jq > /dev/null 2>&1; then
-        jq '.log.level = "error"' "$config_dir" > "$config_dir.tmp" && mv "$config_dir.tmp" "$config_dir"
-    fi
     
     green "内存优化完成"
 }
@@ -530,8 +455,8 @@ RestartSec=5
 StartLimitInterval=60
 StartLimitBurst=5
 LimitNOFILE=infinity
-MemoryLimit=100M
-CPUQuota=30%
+MemoryLimit=60M
+CPUQuota=40%
 
 [Install]
 WantedBy=multi-user.target
@@ -546,27 +471,19 @@ After=network.target
 Type=simple
 NoNewPrivileges=yes
 TimeoutStartSec=0
-ExecStart=/bin/sh -c "/etc/sing-box/argo tunnel --url http://localhost:8001 --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1"
+ExecStart=/bin/sh -c "/etc/sing-box/argo tunnel --url http://localhost:$vmess_port --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1"
 Restart=always
 RestartSec=5
 StartLimitInterval=60
 StartLimitBurst=3
 LimitNOFILE=65536
-MemoryLimit=32M
-CPUQuota=20%
+MemoryLimit=30M
+CPUQuota=25%
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    if [ -f /etc/centos-release ]; then
-        yum install -y chrony
-        systemctl start chronyd
-        systemctl enable chronyd
-        chronyc -a makestep
-        yum update -y ca-certificates
-        bash -c 'echo "0 0" > /proc/sys/net/ipv4/ping_group_range'
-    fi
     systemctl daemon-reload 
     systemctl enable sing-box
     systemctl start sing-box
@@ -591,7 +508,7 @@ EOF
 
 description="Cloudflare Tunnel"
 command="/bin/sh"
-command_args="-c '/etc/sing-box/argo tunnel --url http://localhost:8001 --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1'"
+command_args="-c '/etc/sing-box/argo tunnel --url http://localhost:$vmess_port --no-autoupdate --edge-ip-version auto --protocol http2 > /etc/sing-box/argo.log 2>&1'"
 command_background=true
 pidfile="/var/run/argo.pid"
 EOF
@@ -605,52 +522,39 @@ EOF
 
 # 生成节点信息
 get_info() {  
-  yellow "\nip检测中,请稍等...\n"
-  server_ip=$(get_realip)
-  clear
-  isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
+    yellow "\nip检测中,请稍等...\n"
+    server_ip=$(get_realip)
+    clear
+    
+    if [ -f "${work_dir}/argo.log" ]; then
+        for i in {1..5}; do
+            purple "第 $i 次尝试获取ArgoDoamin中..."
+            argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "${work_dir}/argo.log")
+            [ -n "$argodomain" ] && break
+            sleep 2
+        done
+    else
+        restart_argo
+        sleep 6
+        argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "${work_dir}/argo.log")
+    fi
 
-  if [ -f "${work_dir}/argo.log" ]; then
-      for i in {1..5}; do
-          purple "第 $i 次尝试获取ArgoDoamin中..."
-          argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "${work_dir}/argo.log")
-          [ -n "$argodomain" ] && break
-          sleep 2
-      done
-  else
-      restart_argo
-      sleep 6
-      argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "${work_dir}/argo.log")
-  fi
+    green "\nArgoDomain：${purple}$argodomain${re}\n"
 
-  green "\nArgoDomain：${purple}$argodomain${re}\n"
+    # 生成vmess链接
+    isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
+    VMESS="{ \"v\": \"2\", \"ps\": \"${isp}\", \"add\": \"${CFIP}\", \"port\": \"${CFPORT}\", \"id\": \"${uuid}\", \"aid\": \"0\", \"scy\": \"none\", \"net\": \"ws\", \"type\": \"none\", \"host\": \"${argodomain}\", \"path\": \"/vmess-argo?ed=2560\", \"tls\": \"tls\", \"sni\": \"${argodomain}\", \"alpn\": \"\", \"fp\": \"firefox\", \"allowlnsecure\": \"flase\"}"
 
-  # 只生成Hysteria2节点信息
-  cat > ${work_dir}/node-info.txt << EOF
-=== Hysteria2 节点信息 ===
-服务器: ${server_ip}
-端口: ${hy2_port}
-密码: ${uuid}
-SNI: www.bing.com
-ALPN: h3
-协议: udp
-备注: ${isp}
-
-节点链接:
-hysteria2://${uuid}@${server_ip}:${hy2_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}
+    cat > ${work_dir}/url.txt <<EOF
+vmess://$(echo "$VMESS" | base64 -w0)
 EOF
 
-  echo ""
-  green "=== Hysteria2 节点信息 ==="
-  green "服务器: ${purple}${server_ip}${re}"
-  green "端口: ${purple}${hy2_port}${re}"
-  green "密码: ${purple}${uuid}${re}"
-  green "SNI: ${purple}www.bing.com${re}"
-  green "协议: ${purple}udp${re}"
-  echo ""
-  green "节点链接:"
-  purple "hysteria2://${uuid}@${server_ip}:${hy2_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}"
-  echo ""
+    echo ""
+    purple "VMESS节点链接:"
+    cat ${work_dir}/url.txt
+    echo ""
+    yellow "\n=========================================================================================="
+    green "\n节点信息已生成！复制上方vmess链接使用即可\n"
 }
 
 # 通用服务管理函数
@@ -864,11 +768,11 @@ uninstall_singbox() {
                 rc-update del argo default
                 rc-update del sing-box-watchdog default 2>/dev/null || true
            else
-                # 停止 sing-box和 argo 服务
+                # 停止服务
                 systemctl stop "${server_name}"
                 systemctl stop argo
                 systemctl stop sing-box-watchdog 2>/dev/null || true
-                # 禁用 sing-box 服务
+                # 禁用服务
                 systemctl disable "${server_name}"
                 systemctl disable argo
                 systemctl disable sing-box-watchdog 2>/dev/null || true
@@ -878,12 +782,11 @@ uninstall_singbox() {
             fi
            # 删除配置文件和日志
            rm -rf "${work_dir}" || true
-           rm -rf "${log_dir}" || true
            rm -rf /etc/systemd/system/sing-box.service /etc/systemd/system/argo.service /etc/systemd/system/sing-box-watchdog.service > /dev/null 2>&1
            rm -f /etc/sing-box/watchdog.sh > /dev/null 2>&1
            rm -f /var/log/sing-box/watchdog.log > /dev/null 2>&1
-           
-           green "\nsing-box 卸载成功\n\n" && exit 0
+
+            green "\nsing-box 卸载成功\n\n" && exit 0
            ;;
        *)
            purple "已取消卸载操作\n\n"
@@ -931,219 +834,87 @@ change_config() {
     echo ""
     green "=== 修改节点配置 ===\n"
     green "sing-box当前状态: $singbox_status\n"
-    green "1. 修改Hysteria2端口"
+    green "1. 修改vmess端口"
     skyblue "------------"
-    green "2. 修改Hysteria2密码"
+    green "2. 修改UUID"
     skyblue "------------"
-    green "3. 添加Hysteria2端口跳跃"
-    skyblue "------------"
-    green "4. 删除Hysteria2端口跳跃"
+    green "3. 修改vmess-argo优选域名"
     skyblue "------------"
     purple "0. 返回主菜单"
     skyblue "------------"
     reading "请输入选择: " choice
     case "${choice}" in
         1)
-            reading "\n请输入Hysteria2端口 (回车跳过将使用随机端口): " new_port
+            reading "\n请输入vmess端口 (回车跳过将使用随机端口): " new_port
             [ -z "$new_port" ] && new_port=$(shuf -i 2000-65000 -n 1)
-            
-            # 更新配置文件
-            sed -i '/"type": "hysteria2"/,/"listen_port": [0-9]\+/ s/"listen_port": [0-9]\+/"listen_port": '"$new_port"'/' $config_dir
-            
-            # 重启服务
+            sed -i '/"type": "vmess"/,/listen_port/ s/"listen_port": [0-9]\+/"listen_port": '"$new_port"'/' $config_dir
             restart_singbox
+            allow_port $new_port/tcp > /dev/null 2>&1
             
-            # 放行新端口
-            allow_port $new_port/udp > /dev/null 2>&1
-            
-            # 更新节点信息
-            uuid=$(sed -n 's/.*"password": "\([^"]*\)".*/\1/p' $config_dir)
-            server_ip=$(get_realip)
-            isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
-            
-            cat > ${work_dir}/node-info.txt << EOF
-=== Hysteria2 节点信息 ===
-服务器: ${server_ip}
-端口: ${new_port}
-密码: ${uuid}
-SNI: www.bing.com
-ALPN: h3
-协议: udp
-备注: ${isp}
-
-节点链接:
-hysteria2://${uuid}@${server_ip}:${new_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}
-EOF
-
-            green "\nHysteria2端口已修改为：${purple}${new_port}${re}\n"
-            green "新的节点链接："
-            purple "hysteria2://${uuid}@${server_ip}:${new_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}\n"
-            ;;
-            
-        2)
-            reading "\n请输入新的Hysteria2密码: " new_password
-            [ -z "$new_password" ] && new_password=$(cat /proc/sys/kernel/random/uuid)
-            
-            # 更新配置文件
-            sed -i '/"type": "hysteria2"/,/"password":/ s/"password": "[^"]*"/"password": "'"$new_password"'"/' $config_dir
-            
-            # 重启服务
-            restart_singbox
-            
-            # 更新节点信息
-            listen_port=$(sed -n '/"type": "hysteria2"/,/"listen_port": [0-9]*/ s/.*"listen_port": \([0-9]*\).*/\1/p' $config_dir)
-            server_ip=$(get_realip)
-            isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
-            
-            cat > ${work_dir}/node-info.txt << EOF
-=== Hysteria2 节点信息 ===
-服务器: ${server_ip}
-端口: ${listen_port}
-密码: ${new_password}
-SNI: www.bing.com
-ALPN: h3
-协议: udp
-备注: ${isp}
-
-节点链接:
-hysteria2://${new_password}@${server_ip}:${listen_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}
-EOF
-
-            green "\nHysteria2密码已修改为：${purple}${new_password}${re}\n"
-            green "新的节点链接："
-            purple "hysteria2://${new_password}@${server_ip}:${listen_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}\n"
-            ;;
-            
-        3)  
-            purple "端口跳跃需确保跳跃区间的端口没有被占用，nat鸡请注意可用端口范围，否则可能造成节点不通\n"
-            reading "请输入跳跃起始端口 (回车跳过将使用随机端口): " min_port
-            [ -z "$min_port" ] && min_port=$(shuf -i 50000-65000 -n 1)
-            yellow "你的起始端口为：$min_port"
-            reading "\n请输入跳跃结束端口 (需大于起始端口): " max_port
-            [ -z "$max_port" ] && max_port=$(($min_port + 100)) 
-            yellow "你的结束端口为：$max_port\n"
-            purple "正在安装依赖，并设置端口跳跃规则中，请稍等...\n"
-            
-            listen_port=$(sed -n '/"type": "hysteria2"/,/"listen_port": [0-9]*/ s/.*"listen_port": \([0-9]*\).*/\1/p' $config_dir)
-            
-            # 设置端口跳跃规则
-            iptables -t nat -A PREROUTING -p udp --dport $min_port:$max_port -j DNAT --to-destination :$listen_port > /dev/null
-            command -v ip6tables &> /dev/null && ip6tables -t nat -A PREROUTING -p udp --dport $min_port:$max_port -j DNAT --to-destination :$listen_port > /dev/null
-            
-            # 持久化规则
-            if command_exists rc-service 2>/dev/null; then
-                iptables-save > /etc/iptables/rules.v4
-                command -v ip6tables &> /dev/null && ip6tables-save > /etc/iptables/rules.v6
-
-                cat << 'EOF' > /etc/init.d/iptables
-#!/sbin/openrc-run
-
-depend() {
-    need net
-}
-
-start() {
-    [ -f /etc/iptables/rules.v4 ] && iptables-restore < /etc/iptables/rules.v4
-    command -v ip6tables &> /dev/null && [ -f /etc/iptables/rules.v6 ] && ip6tables-restore < /etc/iptables/rules.v6
-}
-EOF
-
-                chmod +x /etc/init.d/iptables && rc-update add iptables default && /etc/init.d/iptables start
-            elif [ -f /etc/debian_version ]; then
-                DEBIAN_FRONTEND=noninteractive apt install -y iptables-persistent > /dev/null 2>&1 && netfilter-persistent save > /dev/null 2>&1 
-                systemctl enable netfilter-persistent > /dev/null 2>&1 && systemctl start netfilter-persistent > /dev/null 2>&1
-            elif [ -f /etc/redhat-release ]; then
-                manage_packages install iptables-services > /dev/null 2>&1 && service iptables save > /dev/null 2>&1
-                systemctl enable iptables > /dev/null 2>&1 && systemctl start iptables > /dev/null 2>&1
-                command -v ip6tables &> /dev/null && service ip6tables save > /dev/null 2>&1
-                systemctl enable ip6tables > /dev/null 2>&1 && systemctl start ip6tables > /dev/null 2>&1
+            if command_exists rc-service; then
+                if grep -q "localhost:" /etc/init.d/argo; then
+                    sed -i 's/localhost:[0-9]\{1,\}/localhost:'"$new_port"'/' /etc/init.d/argo
+                    get_quick_tunnel
+                    change_argo_domain 
+                fi
             else
-                red "未知系统,请自行将跳跃端口转发到主端口" && exit 1
-            fi            
-            
-            restart_singbox
-            
-            # 更新节点信息
-            uuid=$(sed -n 's/.*"password": "\([^"]*\)".*/\1/p' $config_dir)
-            server_ip=$(get_realip)
-            isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
-            
-            cat > ${work_dir}/node-info.txt << EOF
-=== Hysteria2 节点信息 ===
-服务器: ${server_ip}
-端口: ${listen_port} (跳跃端口: ${min_port}-${max_port})
-密码: ${uuid}
-SNI: www.bing.com
-ALPN: h3
-协议: udp
-备注: ${isp}
-
-节点链接:
-hysteria2://${uuid}@${server_ip}:${listen_port}/?peer=www.bing.com&insecure=1&alpn=h3&obfs=none&mport=${listen_port},${min_port}-${max_port}#${isp}
-EOF
-
-            green "\nHysteria2端口跳跃已开启,跳跃端口为：${purple}$min_port-$max_port${re}\n"
-            green "新的节点链接："
-            purple "hysteria2://${uuid}@${server_ip}:${listen_port}/?peer=www.bing.com&insecure=1&alpn=h3&obfs=none&mport=${listen_port},${min_port}-${max_port}#${isp}\n"
-            ;;
-            
-        4)  
-            # 清除端口跳跃规则
-            iptables -t nat -F PREROUTING  > /dev/null 2>&1
-            command -v ip6tables &> /dev/null && ip6tables -t nat -F PREROUTING  > /dev/null 2>&1
-            
-            # 清理持久化配置
-            if command_exists rc-service 2>/dev/null; then
-                rc-update del iptables default && rm -rf /etc/init.d/iptables 
-            elif [ -f /etc/redhat-release ]; then
-                netfilter-persistent save > /dev/null 2>&1
-            elif [ -f /etc/redhat-release ]; then
-                service iptables save > /dev/null 2>&1
-                command -v ip6tables &> /dev/null && service ip6tables save > /dev/null 2>&1
-            else
-                manage_packages uninstall iptables ip6tables iptables-persistent iptables-service > /dev/null 2>&1
+                if grep -q "localhost:" /etc/systemd/system/argo.service; then
+                    sed -i 's/localhost:[0-9]\{1,\}/localhost:'"$new_port"'/' /etc/systemd/system/argo.service
+                    get_quick_tunnel
+                    change_argo_domain 
+                fi
             fi
-            
-            # 更新节点信息
-            uuid=$(sed -n 's/.*"password": "\([^"]*\)".*/\1/p' $config_dir)
-            listen_port=$(sed -n '/"type": "hysteria2"/,/"listen_port": [0-9]*/ s/.*"listen_port": \([0-9]*\).*/\1/p' $config_dir)
-            server_ip=$(get_realip)
-            isp=$(curl -s --max-time 2 https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed -e 's/ /_/g' || echo "vps")
-            
-            cat > ${work_dir}/node-info.txt << EOF
-=== Hysteria2 节点信息 ===
-服务器: ${server_ip}
-端口: ${listen_port}
-密码: ${uuid}
-SNI: www.bing.com
-ALPN: h3
-协议: udp
-备注: ${isp}
 
-节点链接:
-hysteria2://${uuid}@${server_ip}:${listen_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}
-EOF
+            if [ -f /etc/sing-box/tunnel.yml ]; then
+                sed -i 's/localhost:[0-9]\{1,\}/localhost:'"$new_port"'/' /etc/sing-box/tunnel.yml
+                restart_argo
+            fi
 
-            green "\n端口跳跃已删除\n"
-            green "新的节点链接："
-            purple "hysteria2://${uuid}@${server_ip}:${listen_port}/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#${isp}\n"
+            green "\nvmess端口已修改为：${purple}${new_port}${re}\n"
+            ;;                    
+        2)
+            reading "\n请输入新的UUID: " new_uuid
+            [ -z "$new_uuid" ] && new_uuid=$(cat /proc/sys/kernel/random/uuid)
+            sed -i -E 's/"uuid": "([a-f0-9-]+)"/"uuid": "'"$new_uuid"'"/g' $config_dir
+
+            restart_singbox
+            get_quick_tunnel
+            change_argo_domain
+            green "\nUUID已修改为：${purple}${new_uuid}${re}\n"
             ;;
-            
+        3)  
+            change_cfip ;;
         0)  menu ;;
-        *)  red "无效的选项！" ;; 
+        *)  read "无效的选项！" ;; 
     esac
 }
 
-# 查看节点信息
-check_nodes() {
-    if [ ! -f "${work_dir}/node-info.txt" ]; then
-        yellow "节点信息文件不存在，正在生成..."
-        get_info
-    fi
+# singbox 管理
+manage_singbox() {
+    # 检查sing-box状态
+    local singbox_status=$(check_singbox 2>/dev/null)
+    local singbox_installed=$?
     
+    clear
     echo ""
-    cat ${work_dir}/node-info.txt
-    echo ""
+    green "=== sing-box 管理 ===\n"
+    green "sing-box当前状态: $singbox_status\n"
+    green "1. 启动sing-box服务"
+    skyblue "-------------------"
+    green "2. 停止sing-box服务"
+    skyblue "-------------------"
+    green "3. 重启sing-box服务"
+    skyblue "-------------------"
+    purple "0. 返回主菜单"
+    skyblue "------------"
+    reading "\n请输入选择: " choice
+    case "${choice}" in
+        1) start_singbox ;;  
+        2) stop_singbox ;;
+        3) restart_singbox ;;
+        0) menu ;;
+        *) red "无效的选项！" && sleep 1 && manage_singbox;;
+    esac
 }
 
 # Argo 管理
@@ -1183,7 +954,7 @@ manage_argo() {
          ;; 
         4)
             clear
-            yellow "\n固定隧道可为json或token，固定隧道端口为8001，自行在cf后台设置\n\njson在f佬维护的站点里获取，获取地址：${purple}https://fscarmen.cloudflare.now.cc${re}\n"
+            yellow "\n固定隧道可为json或token，固定隧道端口为$vmess_port，自行在cf后台设置\n\njson在f佬维护的站点里获取，获取地址：${purple}https://fscarmen.cloudflare.now.cc${re}\n"
             reading "\n请输入你的argo域名: " argo_domain
             ArgoDomain=$argo_domain
             reading "\n请输入你的argo密钥(token或json): " argo_auth
@@ -1196,7 +967,7 @@ protocol: http2
                                            
 ingress:
   - hostname: $ArgoDomain
-    service: http://localhost:8001
+    service: http://localhost:$vmess_port
     originRequest:
       noTLSVerify: true
   - service: http_status:404
@@ -1265,56 +1036,111 @@ EOF
 
 # 获取argo临时隧道
 get_quick_tunnel() {
-    restart_argo
-    yellow "获取临时argo域名中，请稍等...\n"
-    sleep 3
-    if [ -f /etc/sing-box/argo.log ]; then
-      for i in {1..5}; do
-          purple "第 $i 次尝试获取ArgoDoamin中..."
-          get_argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "/etc/sing-box/argo.log")
-          [ -n "$get_argodomain" ] && break
-          sleep 2
-      done
-    else
-      restart_argo
-      sleep 6
+restart_argo
+yellow "获取临时argo域名中，请稍等...\n"
+sleep 3
+if [ -f /etc/sing-box/argo.log ]; then
+  for i in {1..5}; do
+      purple "第 $i 次尝试获取ArgoDoamin中..."
       get_argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "/etc/sing-box/argo.log")
-    fi
-    green "ArgoDomain：${purple}$get_argodomain${re}\n"
-    ArgoDomain=$get_argodomain
+      [ -n "$get_argodomain" ] && break
+      sleep 2
+  done
+else
+  restart_argo
+  sleep 6
+  get_argodomain=$(sed -n 's|.*https://\([^/]*trycloudflare\.com\).*|\1|p' "/etc/sing-box/argo.log")
+fi
+green "ArgoDomain：${purple}$get_argodomain${re}\n"
+ArgoDomain=$get_argodomain
 }
 
-# 更新Argo域名到节点信息
+# 更新Argo域名到配置
 change_argo_domain() {
-    green "Argo域名已更新为: ${purple}$ArgoDomain${re}\n"
+content=$(cat "$work_dir/url.txt")
+vmess_url=$(grep -o 'vmess://[^ ]*' "$work_dir/url.txt")
+vmess_prefix="vmess://"
+encoded_vmess="${vmess_url#"$vmess_prefix"}"
+decoded_vmess=$(echo "$encoded_vmess" | base64 --decode)
+updated_vmess=$(echo "$decoded_vmess" | jq --arg new_domain "$ArgoDomain" '.host = $new_domain | .sni = $new_domain')
+encoded_updated_vmess=$(echo "$updated_vmess" | base64 | tr -d '\n')
+new_vmess_url="${vmess_prefix}${encoded_updated_vmess}"
+new_content=$(echo "$content" | sed "s|$vmess_url|$new_vmess_url|")
+echo "$new_content" > "$work_dir/url.txt"
+green "vmess节点已更新\n"
+purple "$new_vmess_url\n" 
 }
 
-# singbox 管理
-manage_singbox() {
-    # 检查sing-box状态
-    local singbox_status=$(check_singbox 2>/dev/null)
-    local singbox_installed=$?
-    
+# 查看节点信息
+check_nodes() {
+    if [ -f "$work_dir/url.txt" ]; then
+        purple "VMESS节点链接:"
+        cat "$work_dir/url.txt"
+        echo ""
+    else
+        yellow "节点信息不存在，请先安装sing-box"
+    fi
+}
+
+change_cfip() {
     clear
-    echo ""
-    green "=== sing-box 管理 ===\n"
-    green "sing-box当前状态: $singbox_status\n"
-    green "1. 启动sing-box服务"
-    skyblue "-------------------"
-    green "2. 停止sing-box服务"
-    skyblue "-------------------"
-    green "3. 重启sing-box服务"
-    skyblue "-------------------"
-    purple "0. 返回主菜单"
-    skyblue "------------"
-    reading "\n请输入选择: " choice
-    case "${choice}" in
-        1) start_singbox ;;  
-        2) stop_singbox ;;
-        3) restart_singbox ;;
-        0) menu ;;
-        *) red "无效的选项！" && sleep 1 && manage_singbox;;
-    esac
+    yellow "修改vmess-argo优选域名\n"
+    green "1: cf.090227.xyz  2: cf.877774.xyz  3: cf.877771.xyz  4: cdns.doon.eu.org  5: cf.zhetengsha.eu.org  6: time.is\n"
+    reading "请输入你的优选域名或优选IP\n(请输入1至6选项,可输入域名:端口 或 IP:端口,直接回车默认使用1): " cfip_input
+
+    if [ -z "$cfip_input" ]; then
+        cfip="cf.090227.xyz"
+        cfport="443"
+    else
+        case "$cfip_input" in
+            "1")
+                cfip="cf.090227.xyz"
+                cfport="443"
+                ;;
+            "2")
+                cfip="cf.877774.xyz"
+                cfport="443"
+                ;;
+            "3")
+                cfip="cf.877771.xyz"
+                cfport="443"
+                ;;
+            "4")
+                cfip="cdns.doon.eu.org"
+                cfport="443"
+                ;;
+            "5")
+                cfip="cf.zhetengsha.eu.org"
+                cfport="443"
+                ;;
+            "6")
+                cfip="time.is"
+                cfport="443"
+                ;;
+            *)
+                if [[ "$cfip_input" =~ : ]]; then
+                    cfip=$(echo "$cfip_input" | cut -d':' -f1)
+                    cfport=$(echo "$cfip_input" | cut -d':' -f2)
+                else
+                    cfip="$cfip_input"
+                    cfport="443"
+                fi
+                ;;
+        esac
+    fi
+
+content=$(cat "$work_dir/url.txt")
+vmess_url=$(grep -o 'vmess://[^ ]*' "$work_dir/url.txt")
+encoded_part="${vmess_url#vmess://}"
+decoded_json=$(echo "$encoded_part" | base64 --decode 2>/dev/null)
+updated_json=$(echo "$decoded_json" | jq --arg cfip "$cfip" --argjson cfport "$cfport" \
+    '.add = $cfip | .port = $cfport')
+new_encoded_part=$(echo "$updated_json" | base64 -w0)
+new_vmess_url="vmess://$new_encoded_part"
+new_content=$(echo "$content" | sed "s|$vmess_url|$new_vmess_url|")
+echo "$new_content" > "$work_dir/url.txt"
+green "\nvmess节点优选域名已更新为：${purple}${cfip}:${cfport}${re}\n"
+purple "$new_vmess_url\n"
 }
 
 # 主菜单
@@ -1325,7 +1151,7 @@ menu() {
    
    clear
    echo ""
-   purple "=== sing-box Hysteria2 保活脚本 ===\n"
+   purple "=== sing-box vmess+Argo保活脚本 ===\n"
    purple "---Argo 状态: ${argo_status}"   
    purple "singbox 状态: ${singbox_status}"
    purple "看门狗状态: ${watchdog_status}\n"
@@ -1339,11 +1165,9 @@ menu() {
    green  "6. 查看节点信息"
    green  "7. 修改节点配置"
    echo  "==============="
-   purple "8. ssh综合工具箱"
-   echo  "==============="
    red "0. 退出脚本"
    echo "==========="
-   reading "请输入选择(0-8): " choice
+   reading "请输入选择(0-7): " choice
    echo ""
 }
 
@@ -1359,7 +1183,7 @@ while true; do
             if [ ${check_singbox} -eq 0 ]; then
                 yellow "sing-box 已经安装！\n"
             else
-                manage_packages install jq tar openssl lsof coreutils
+                install_packages jq curl
                 install_singbox
                 if command_exists systemctl; then
                     main_systemd_services
@@ -1381,6 +1205,7 @@ while true; do
                 # 应用内存优化
                 optimize_memory
                 green "\n✅ 安装完成！进程保活看门狗已启动\n"
+                green "内存占用限制: sing-box 60MB, argo 30MB, 看门狗 20MB\n"
             fi
            ;;
         2) uninstall_singbox ;;
@@ -1389,12 +1214,8 @@ while true; do
         5) manage_watchdog ;;
         6) check_nodes ;;
         7) change_config ;;
-        8) 
-           clear
-           bash <(curl -Ls ssh_tool.eooce.com)
-           ;;           
         0) exit 0 ;;
-        *) red "无效的选项，请输入 0 到 8" ;;
+        *) red "无效的选项，请输入 0 到 7" ;;
    esac
    read -n 1 -s -r -p $'\033[1;91m按任意键返回...\033[0m'
 done

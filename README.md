@@ -6,6 +6,11 @@
 
 ## 使用方法
 
+## socks5代理配置
+```
+bash <(curl -Ls https://raw.githubusercontent.com/suouaki/agsb/main/xrayL.sh)
+```
+
 ### 免费vps免root一键安装hysteria2
 ```bash
 curl -o sing-box-argo.sh https://raw.githubusercontent.com/suouaki/agsb/main/sing-box-argo.sh && chmod +x sing-box-argo.sh && ./sing-box-argo.sh

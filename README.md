@@ -16,7 +16,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/suouaki/agsb/main/xrayL.sh)
 curl -o sing-box-argo.sh https://raw.githubusercontent.com/suouaki/agsb/main/sing-box-argo.sh && chmod +x sing-box-argo.sh && ./sing-box-argo.sh
 
 ```
-### 免费vps免root一键安装hysteria2
+### vps一键安装四合一保活脚本
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/suouaki/agsb/main/sing-box.sh)
 

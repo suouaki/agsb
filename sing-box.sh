@@ -1700,9 +1700,9 @@ check_nodes() {
     lujing=$(sed -n 's|.*location = /\([^ ]*\).*|\1|p' "/etc/nginx/conf.d/sing-box.conf")
     sub_port=$(sed -n 's/^\s*listen \([0-9]\+\);/\1/p' "/etc/nginx/conf.d/sing-box.conf")
     base64_url="http://${server_ip}:${sub_port}/${lujing}"
-    green "\n\nSurge订阅链接: ${purple}https://sublink.eooce.com/surge?config=${base64_url}${re}\n"
-    green "sing-box订阅链接: ${purple}https://sublink.eooce.com/singbox?config=${base64_url}${purple}\n"
-    green "Mihomo/Clash系列订阅链接: ${purple}https://sublink.eooce.com/clash?config=${base64_url}${re}\n"
+    green "\n\nSurge订阅链接: ${purple}https://subconv-k9m2.zeabur.app/surge?config=${base64_url}${re}\n"
+    green "sing-box订阅链接: ${purple}https://subconv-k9m2.zeabur.app/singbox?config=${base64_url}${purple}\n"
+    green "Mihomo/Clash系列订阅链接: ${purple}https://subconv-k9m2.zeabur.app/clash?config=${base64_url}${re}\n"
     green "V2rayN,Shadowrocket,Nekobox,Loon,Karing,Sterisand订阅链接: ${purple}${base64_url}${re}\n"
 }
 
